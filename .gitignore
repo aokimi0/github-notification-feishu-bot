@@ -1,0 +1,24 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Environment variables
+.env
+
+# Configuration files with sensitive information
+feishu_config.json
+app_secrets.json
+
+# Virtual environment
+# If your venv is in the project dir, uncomment the line below
+# venv/
+# .venv/
+
+# IDE / Editor specific files
+.vscode/
+.idea/
+*.swp
+*.swo 
+.cursorrules
