@@ -21,7 +21,7 @@ APP_CONFIG_FILE = "feishu_config.json" # 统一的配置文件
 def load_app_config():
     global FEISHU_APP_ID, FEISHU_APP_SECRET, FEISHU_CHAT_ID
     config_loaded_successfully = False
-    required_keys = ["app_id", "app_secret", "default_chat_id"]
+    required_keys = ["feishu_app_id", "feishu_app_secret", "default_chat_id"]
     default_chat_id_from_config = None
 
     if os.path.exists(APP_CONFIG_FILE):
@@ -29,32 +29,30 @@ def load_app_config():
             with open(APP_CONFIG_FILE, 'r') as f:
                 config_data = json.load(f)
             
-            # 检查核心配置是否存在
             missing_keys = [key for key in required_keys if not config_data.get(key)]
             if missing_keys:
                 logger.error(f"{APP_CONFIG_FILE} is missing required keys: {', '.join(missing_keys)}. Please check the file content.")
-                return False # 表示加载失败，服务不应启动
+                return False
 
-            FEISHU_APP_ID = config_data.get("app_id")
-            FEISHU_APP_SECRET = config_data.get("app_secret")
+            FEISHU_APP_ID = config_data.get("feishu_app_id")
+            FEISHU_APP_SECRET = config_data.get("feishu_app_secret")
             default_chat_id_from_config = config_data.get("default_chat_id")
-            current_chat_id_from_file = config_data.get("current_chat_id")
+            current_chat_id_from_file = config_data.get("feishu_chat_id")
 
             if current_chat_id_from_file:
                 FEISHU_CHAT_ID = current_chat_id_from_file
-                logger.info(f"Loaded current_chat_id from {APP_CONFIG_FILE}: {FEISHU_CHAT_ID}")
-            elif default_chat_id_from_config: # current_chat_id 不存在，但 default_chat_id 存在
+                logger.info(f"Loaded feishu_chat_id from {APP_CONFIG_FILE}: {FEISHU_CHAT_ID}")
+            elif default_chat_id_from_config:
                 FEISHU_CHAT_ID = default_chat_id_from_config
-                logger.info(f"current_chat_id not found in {APP_CONFIG_FILE}. Using default_chat_id: {FEISHU_CHAT_ID}. Saving it as current_chat_id.")
-                # 将 default_chat_id 保存为 current_chat_id
-                config_data["current_chat_id"] = default_chat_id_from_config 
+                logger.info(f"feishu_chat_id not found in {APP_CONFIG_FILE}. Using default_chat_id: {FEISHU_CHAT_ID}. Saving it as feishu_chat_id.")
+                config_data["feishu_chat_id"] = default_chat_id_from_config
                 try:
                     with open(APP_CONFIG_FILE, 'w') as f_write:
                         json.dump(config_data, f_write, indent=2)
-                    logger.info(f"Updated {APP_CONFIG_FILE} with current_chat_id set to default_chat_id.")
+                    logger.info(f"Updated {APP_CONFIG_FILE} with feishu_chat_id set to default_chat_id.")
                 except IOError as e_write:
                     logger.error(f"Error writing updated config to {APP_CONFIG_FILE}: {e_write}")
-            else: # Should not happen if required_keys check passed, but as a safeguard
+            else:
                 logger.error(f"default_chat_id is also missing. Cannot determine chat_id.")
                 return False
 
@@ -64,7 +62,7 @@ def load_app_config():
         except (json.JSONDecodeError, IOError) as e:
             logger.error(f"Error loading {APP_CONFIG_FILE}: {e}. Please ensure it is valid JSON and contains required keys.")
     else:
-        logger.error(f"{APP_CONFIG_FILE} not found. Please create it with app_id, app_secret, default_chat_id, and optionally current_chat_id.")
+        logger.error(f"{APP_CONFIG_FILE} not found. Please create it with feishu_app_id, feishu_app_secret, default_chat_id, and optionally feishu_chat_id.")
     
     return config_loaded_successfully
 
@@ -77,26 +75,24 @@ def save_current_chat_id_to_config(new_chat_id):
                 current_config = json.load(f_read)
         except (json.JSONDecodeError, IOError) as e_read:
             logger.error(f"Error reading {APP_CONFIG_FILE} before saving new chat_id: {e_read}. Proceeding with new data.")
-            # 如果读取失败，至少要保证 app_id, app_secret, default_chat_id 有值 (虽然它们应由load_app_config保证)
-            # 但这里我们主要目标是更新 current_chat_id
-            current_config["app_id"] = FEISHU_APP_ID # 从全局变量回填，假设已加载
-            current_config["app_secret"] = FEISHU_APP_SECRET
-            # default_chat_id 需要思考如何获取，或者假设它不会被此函数修改
-            # 为简单起见，如果文件损坏到无法读取，可能需要用户手动修复
+            current_config["feishu_app_id"] = FEISHU_APP_ID
+            current_config["feishu_app_secret"] = FEISHU_APP_SECRET
     
-    current_config["current_chat_id"] = new_chat_id
-    # 确保其他必要字段存在，如果它们之前不存在 (不太可能发生如果load_app_config正确工作)
-    if "app_id" not in current_config and FEISHU_APP_ID: current_config["app_id"] = FEISHU_APP_ID
-    if "app_secret" not in current_config and FEISHU_APP_SECRET: current_config["app_secret"] = FEISHU_APP_SECRET
-    # if "default_chat_id" not in current_config: # 需要一个源来获取 default_chat_id
+    current_config["feishu_chat_id"] = new_chat_id
+    if "feishu_app_id" not in current_config and FEISHU_APP_ID: current_config["feishu_app_id"] = FEISHU_APP_ID
+    if "feishu_app_secret" not in current_config and FEISHU_APP_SECRET: current_config["feishu_app_secret"] = FEISHU_APP_SECRET
+    if "default_chat_id" not in current_config and current_config.get("default_chat_id"):
+        pass
+    elif "default_chat_id" not in current_config:
+        pass
 
     try:
         with open(APP_CONFIG_FILE, 'w') as f_write:
             json.dump(current_config, f_write, indent=2)
-        FEISHU_CHAT_ID = new_chat_id # 更新全局变量
-        logger.info(f"Saved new current_chat_id to {APP_CONFIG_FILE}: {FEISHU_CHAT_ID}")
+        FEISHU_CHAT_ID = new_chat_id
+        logger.info(f"Saved new feishu_chat_id to {APP_CONFIG_FILE}: {FEISHU_CHAT_ID}")
     except IOError as e_write:
-        logger.error(f"Error saving new current_chat_id to {APP_CONFIG_FILE}: {e_write}")
+        logger.error(f"Error saving new feishu_chat_id to {APP_CONFIG_FILE}: {e_write}")
 
 # Load all app configurations at startup
 CONFIG_SUCCESSFULLY_LOADED = load_app_config()
@@ -337,6 +333,11 @@ async def github_webhook_receiver(request: Request):
                             }
                         ]
                     })
+            
+            card_elements.append({
+                "tag": "div",
+                "text": {"tag": "lark_md", "content": "💾 请及时拉取最新数据 git pull origin main"}
+            })
             
             # 完整的消息卡片JSON对象 (content部分)
             feishu_card_content_obj = {
