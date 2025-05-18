@@ -296,7 +296,7 @@ async def github_webhook_receiver(request: Request):
                 },
                 {
                     "tag": "div",
-                    "text": {"tag": "lark_md", "content": f"👤 **提交者**: {commit_author} (推送者: {pusher_name})"}
+                    "text": {"tag": "lark_md", "content": f"👤 **提交者**: {commit_author}"}
                 },
                 {
                     "tag": "div",
