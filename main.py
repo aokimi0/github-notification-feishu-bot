@@ -14,12 +14,13 @@ logger = logging.getLogger(__name__)
 FEISHU_APP_ID = None
 FEISHU_APP_SECRET = None
 FEISHU_CHAT_ID = None # 这是实际操作中使用的 current_chat_id
+PROJECT_CHAT_MAPPING = None
 # DEFAULT_FEISHU_CHAT_ID 将从配置文件读取，不再硬编码
 
 APP_CONFIG_FILE = "feishu_config.json" # 统一的配置文件
 
 def load_app_config():
-    global FEISHU_APP_ID, FEISHU_APP_SECRET, FEISHU_CHAT_ID
+    global FEISHU_APP_ID, FEISHU_APP_SECRET, FEISHU_CHAT_ID, PROJECT_CHAT_MAPPING
     config_loaded_successfully = False
     required_keys = ["feishu_app_id", "feishu_app_secret", "default_chat_id"]
     default_chat_id_from_config = None
@@ -38,6 +39,7 @@ def load_app_config():
             FEISHU_APP_SECRET = config_data.get("feishu_app_secret")
             default_chat_id_from_config = config_data.get("default_chat_id")
             current_chat_id_from_file = config_data.get("feishu_chat_id")
+            project_chat_mapping_from_file = config_data.get("project_chat_mapping")
 
             if current_chat_id_from_file:
                 FEISHU_CHAT_ID = current_chat_id_from_file
@@ -55,6 +57,19 @@ def load_app_config():
             else:
                 logger.error(f"default_chat_id is also missing. Cannot determine chat_id.")
                 return False
+
+            if project_chat_mapping_from_file:
+                PROJECT_CHAT_MAPPING = project_chat_mapping_from_file
+                logger.info(f"Loaded project_chat_mapping from {APP_CONFIG_FILE}: {PROJECT_CHAT_MAPPING}")
+            else:
+                logger.info(f"project_chat_mapping not found in {APP_CONFIG_FILE}. Using default_chat_id as project_chat_mapping.")
+                config_data["project_chat_mapping"] = default_chat_id_from_config
+                try:
+                    with open(APP_CONFIG_FILE, 'w') as f_write:
+                        json.dump(config_data, f_write, indent=2)
+                    logger.info(f"Updated {APP_CONFIG_FILE} with project_chat_mapping set to default_chat_id.")
+                except IOError as e_write:
+                    logger.error(f"Error writing updated config to {APP_CONFIG_FILE}: {e_write}")
 
             logger.info(f"Successfully loaded App ID, App Secret, and Chat ID from {APP_CONFIG_FILE}.")
             config_loaded_successfully = True
@@ -96,6 +111,25 @@ def save_current_chat_id_to_config(new_chat_id):
 
 # Load all app configurations at startup
 CONFIG_SUCCESSFULLY_LOADED = load_app_config()
+
+def get_chat_id_for_project(repo_full_name):
+    """根据项目名称获取对应的群组ID"""
+    if not PROJECT_CHAT_MAPPING:
+        logger.warning("项目群组映射未配置，使用默认群组")
+        return FEISHU_CHAT_ID
+    
+    chat_id = PROJECT_CHAT_MAPPING.get(repo_full_name)
+    if chat_id:
+        logger.info(f"项目 {repo_full_name} 使用专用群组: {chat_id}")
+        return chat_id
+    
+    default_chat_id = PROJECT_CHAT_MAPPING.get("default")
+    if default_chat_id:
+        logger.info(f"项目 {repo_full_name} 使用默认群组: {default_chat_id}")
+        return default_chat_id
+    
+    logger.warning(f"项目 {repo_full_name} 未找到配置的群组，使用系统默认群组")
+    return FEISHU_CHAT_ID
 
 # 缓存 tenant_access_token 及其过期时间
 tenant_access_token_cache = {
@@ -232,10 +266,6 @@ async def github_webhook_receiver(request: Request):
         logger.error("Feishu App ID or App Secret not configured properly.")
         raise HTTPException(status_code=500, detail="Feishu App ID or App Secret not configured properly.")
 
-    if not FEISHU_CHAT_ID: # Check if CHAT_ID is set (either from config, event, or default load)
-        logger.error("FEISHU_CHAT_ID is not set. Bot may need to be added to a chat, or config (feishu_config.json) is problematic.")
-        raise HTTPException(status_code=500, detail="FEISHU_CHAT_ID is not set. Check configuration or bot events.")
-
     try:
         payload = await request.json()
     except Exception as e:
@@ -243,11 +273,16 @@ async def github_webhook_receiver(request: Request):
         raise HTTPException(status_code=400, detail="无法解析JSON负载")
 
     event_type = request.headers.get("X-GitHub-Event")
-    logger.info(f"接收到GitHub事件: {event_type}")
+    repo_name = payload.get("repository", {}).get("full_name", "未知仓库")
+    logger.info(f"接收到GitHub事件: {event_type}, 项目: {repo_name}")
+
+    target_chat_id = get_chat_id_for_project(repo_name)
+    if not target_chat_id:
+        logger.error(f"无法确定项目 {repo_name} 的目标群组")
+        raise HTTPException(status_code=500, detail=f"无法确定项目 {repo_name} 的目标群组")
 
     if event_type == "push":
         try:
-            repo_name = payload.get("repository", {}).get("full_name", "未知仓库")
             ref = payload.get("ref", "未知分支") 
             branch_name = ref.split("/")[-1] if ref else "未知分支"
             
@@ -364,7 +399,7 @@ async def github_webhook_receiver(request: Request):
             
             # Correctly create the JSON payload for Feishu API
             feishu_api_payload = {
-                "receive_id": FEISHU_CHAT_ID,
+                "receive_id": target_chat_id,
                 "msg_type": "interactive", # <--- 改为 interactive
                 "content": json.dumps(feishu_card_content_obj) # <--- content 是卡片对象的JSON字符串
             }
@@ -372,16 +407,16 @@ async def github_webhook_receiver(request: Request):
             logger.info(f"准备通过API发送到飞书的消息 (卡片): {feishu_api_payload}")
             
             response = requests.post(send_message_url, headers=headers, json=feishu_api_payload, timeout=10)
-            response.raise_for_status() # Will raise an HTTPError if the HTTP request returned an unsuccessful status code
+            response.raise_for_status()
             response_data = response.json()
 
             if response_data.get("code") == 0:
-                logger.info(f"成功通过API转发到飞书: {response.status_code} - {response_data}")
+                logger.info(f"成功将项目 {repo_name} 的更新通过API转发到飞书群组 {target_chat_id}: {response.status_code} - {response_data}")
             else:
                 logger.error(f"通过API发送到飞书失败: {response_data.get('msg')}, code: {response_data.get('code')}")
                 raise HTTPException(status_code=500, detail=f"通过API发送到飞书失败: {response_data.get('msg')}")
 
-            return {"status": "success", "message": "已成功通过API转发到飞书"}
+            return {"status": "success", "message": f"已成功将项目 {repo_name} 的更新转发到群组 {target_chat_id}"}
 
         except HTTPException: # Re-raise HTTPException
             raise
@@ -396,6 +431,33 @@ async def github_webhook_receiver(request: Request):
     else:
         logger.info(f"忽略非push事件: {event_type}")
         return {"status": "ignored", "message": f"已忽略事件类型: {event_type}"}
+
+@app.get("/config/project-mapping")
+async def get_project_mapping():
+    """获取项目群组映射配置"""
+    if not PROJECT_CHAT_MAPPING:
+        return {"status": "error", "message": "项目群组映射未配置"}
+    
+    return {
+        "status": "success", 
+        "project_chat_mapping": PROJECT_CHAT_MAPPING,
+        "message": f"当前配置了 {len(PROJECT_CHAT_MAPPING)} 个项目映射"
+    }
+
+@app.get("/")
+async def root():
+    """服务状态检查"""
+    return {
+        "service": "GitHub to Feishu Webhook",
+        "status": "running",
+        "config_loaded": CONFIG_SUCCESSFULLY_LOADED,
+        "endpoints": [
+            "/webhook/github - GitHub webhook接收",
+            "/webhook/feishu_events - 飞书事件接收", 
+            "/config/project-mapping - 查看项目群组映射",
+            "/ - 服务状态"
+        ]
+    }
 
 if __name__ == "__main__":
     if not CONFIG_SUCCESSFULLY_LOADED:
