@@ -2,13 +2,57 @@ import uvicorn
 from fastapi import FastAPI, Request, HTTPException
 import requests
 import logging
+from logging.handlers import TimedRotatingFileHandler
 import json
 import os
 import time
 
+# 创建 logs 目录
+logs_dir = "logs"
+if not os.path.exists(logs_dir):
+    try:
+        os.makedirs(logs_dir)
+    except PermissionError:
+        pass
+
 # 配置日志
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+# 清除默认的 handler
+logger.handlers.clear()
+
+# 创建格式器
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
+# 控制台输出
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+console_handler.setFormatter(formatter)
+
+# 文件输出 - 按天轮转
+file_handler = TimedRotatingFileHandler(
+    filename=os.path.join(logs_dir, 'github_webhook.log'),
+    when='midnight',
+    interval=1,
+    backupCount=30,
+    encoding='utf-8'
+)
+file_handler.setLevel(logging.INFO)
+file_handler.setFormatter(formatter)
+file_handler.suffix = "%Y-%m-%d"
+
+# 添加处理器到日志器
+logger.addHandler(console_handler)
+logger.addHandler(file_handler)
+
+# 设置根日志器，避免重复日志
+logging.getLogger().handlers.clear()
+logging.getLogger().addHandler(console_handler)
+logging.getLogger().addHandler(file_handler)
+logging.getLogger().setLevel(logging.INFO)
+
+logger.info("日志系统初始化完成，日志将保存到 logs/ 目录")
 
 # 应用配置变量 - 将从 feishu_config.json 加载
 FEISHU_APP_ID = None
