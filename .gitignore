@@ -22,3 +22,7 @@ app_secrets.json
 *.swp
 *.swo 
 .cursorrules
+
+
+# logs
+logs/
