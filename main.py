@@ -293,12 +293,47 @@ async def feishu_events_receiver(request: Request):
         event_data = payload.get("event", {})
         event_chat_id = event_data.get("chat_id")
         if event_chat_id:
-            logger.info(f"Bot added to chat event received. Chat ID: {event_chat_id}")
+            logger.info(f"Bot added to chat event received. New Chat ID: {event_chat_id}")
             save_current_chat_id_to_config(event_chat_id) # 使用新的保存函数
             return {"status": "success", "message": f"FEISHU_CHAT_ID set to {event_chat_id} and saved."}
         else:
             logger.warning("Received 'im.chat.member.bot.added_v1' event but chat_id was missing.")
             return {"status": "warning", "message": "Chat ID missing in event."}
+
+    # Handle Bot Removed from Chat Event
+    elif event_header.get("event_type") == "im.chat.member.bot.deleted_v1":
+        event_data = payload.get("event", {})
+        event_chat_id = event_data.get("chat_id")
+        
+        logger.info(f"Bot removed from chat event received. Chat ID from event: {event_chat_id}")
+
+        if not event_chat_id:
+            logger.warning("Received 'im.chat.member.bot.deleted_v1' event but chat_id was missing.")
+            return {"status": "warning", "message": "Chat ID missing in removal event."}
+
+        # Check if the bot was removed from the currently active chat
+        if event_chat_id == FEISHU_CHAT_ID:
+            logger.warning(f"Bot was removed from the currently active chat ({FEISHU_CHAT_ID}). Attempting to revert to default chat ID.")
+            
+            default_chat_id = None
+            if os.path.exists(APP_CONFIG_FILE):
+                try:
+                    with open(APP_CONFIG_FILE, 'r') as f_read:
+                        current_config = json.load(f_read)
+                    default_chat_id = current_config.get("default_chat_id")
+                except (json.JSONDecodeError, IOError) as e_read:
+                    logger.error(f"Error reading {APP_CONFIG_FILE} to find default_chat_id: {e_read}")
+
+            if default_chat_id:
+                logger.info(f"Found default_chat_id: {default_chat_id}. Reverting active chat ID.")
+                save_current_chat_id_to_config(default_chat_id)
+                return {"status": "success", "message": f"Bot removed from {event_chat_id}. Active chat ID reverted to default."}
+            else:
+                logger.error("Could not find a default_chat_id to revert to. The active chat ID might now be invalid until a bot is added to a new chat.")
+                return {"status": "error", "message": "Bot removed from active chat, but no default_chat_id was found to revert to."}
+        else:
+            logger.info(f"Bot was removed from chat {event_chat_id}, which is not the currently active chat ({FEISHU_CHAT_ID}). No configuration change needed.")
+            return {"status": "success", "message": "Bot removed from an inactive chat."}
     
     logger.info(f"Ignored Feishu event type: {event_header.get('event_type')}")
     return {"status": "ignored", "message": "Event type not handled by this endpoint."}
@@ -503,8 +538,76 @@ async def root():
         ]
     }
 
+def create_systemd_service():
+    """创建并安装 systemd 服务"""
+    import sys
+    import subprocess
+    
+    service_name = "github_webhook"
+    service_file_path = f"/etc/systemd/system/{service_name}.service"
+    
+    # 检查是否以 root 权限运行
+    if os.geteuid() != 0:
+        logger.error("此操作需要 root 权限，请使用 'sudo python main.py install-service' 运行")
+        sys.exit(1)
+
+    python_executable = "/opt/venvs/base/bin/python" # 明确使用指定的 python 环境
+    script_path = os.path.abspath(__file__)
+    working_directory = os.path.dirname(script_path)
+
+    logger.info(f"将使用 Python 解释器: {python_executable}")
+    logger.info(f"脚本路径: {script_path}")
+    logger.info(f"工作目录: {working_directory}")
+
+    service_content = f"""[Unit]
+Description=GitHub Webhook to Feishu Service
+After=network.target
+
+[Service]
+User=root
+WorkingDirectory={working_directory}
+ExecStart={python_executable} {script_path}
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+"""
+    
+    try:
+        logger.info(f"正在创建 systemd 服务文件: {service_file_path}")
+        with open(service_file_path, "w") as f:
+            f.write(service_content)
+        
+        logger.info("刷新 systemd 配置...")
+        subprocess.run(["systemctl", "daemon-reload"], check=True)
+        
+        logger.info(f"启用服务 {service_name}...")
+        subprocess.run(["systemctl", "enable", service_name], check=True)
+        
+        logger.info(f"启动服务 {service_name}...")
+        subprocess.run(["systemctl", "restart", service_name], check=True)
+        
+        logger.info(f"服务 '{service_name}' 已成功安装并启动。")
+        logger.info("您可以使用 'systemctl status github_webhook' 来查看服务状态。")
+
+    except FileNotFoundError as e:
+        logger.error(f"命令执行失败: {e}. 请确保 systemctl 已安装并且在您的系统 PATH 中。")
+        sys.exit(1)
+    except subprocess.CalledProcessError as e:
+        logger.error(f"执行 systemd 命令时出错: {e}")
+        sys.exit(1)
+    except IOError as e:
+        logger.error(f"写入服务文件时出错: {e}")
+        sys.exit(1)
+
 if __name__ == "__main__":
-    if not CONFIG_SUCCESSFULLY_LOADED:
-        logger.error("Application configuration failed to load. Please check feishu_config.json. Service will not start.")
+    import sys
+    # 命令行参数处理
+    if len(sys.argv) > 1 and sys.argv[1] == "install-service":
+        create_systemd_service()
     else:
-        uvicorn.run(app, host="0.0.0.0", port=8002, log_level="info") 
+        if not CONFIG_SUCCESSFULLY_LOADED:
+            logger.error("Application configuration failed to load. Please check feishu_config.json. Service will not start.")
+        else:
+            uvicorn.run(app, host="0.0.0.0", port=8002, log_level="info") 
