@@ -156,6 +156,57 @@ def save_current_chat_id_to_config(new_chat_id):
 # Load all app configurations at startup
 CONFIG_SUCCESSFULLY_LOADED = load_app_config()
 
+def format_commit_message(commit):
+    """格式化提交信息，添加图标和样式"""
+    message = commit.get("message", "无提交信息").split('\n')[0]
+    author = commit.get("author", {}).get("name", "未知作者")
+
+    # 为提交者添加@符号并加粗
+    author_display = f"**@{author}**" if author != "未知作者" else author
+
+    # 根据提交类型添加图标
+    if message.lower().startswith('feat:'):
+        icon = "✨"
+        type_label = "特性"
+    elif message.lower().startswith('fix:'):
+        icon = "🐛"
+        type_label = "修复"
+    elif message.lower().startswith('docs:'):
+        icon = "📚"
+        type_label = "文档"
+    elif message.lower().startswith('style:'):
+        icon = "💅"
+        type_label = "样式"
+    elif message.lower().startswith('refactor:'):
+        icon = "♻️"
+        type_label = "重构"
+    elif message.lower().startswith('test:'):
+        icon = "🧪"
+        type_label = "测试"
+    elif message.lower().startswith('chore:'):
+        icon = "🔧"
+        type_label = "杂项"
+    elif message.lower().startswith('perf:'):
+        icon = "⚡"
+        type_label = "性能"
+    elif message.lower().startswith('ci:'):
+        icon = "🚀"
+        type_label = "CI"
+    elif message.lower().startswith('build:'):
+        icon = "📦"
+        type_label = "构建"
+    elif message.lower().startswith('revert:'):
+        icon = "⏪"
+        type_label = "回滚"
+    elif message.lower().startswith('merge'):
+        icon = "🔀"
+        type_label = "合并"
+    else:
+        icon = "📝"
+        type_label = "其他"
+
+    return f"{icon} **{type_label}** {message}", author_display
+
 def get_chat_id_for_project(repo_full_name):
     """根据项目名称获取对应的群组ID"""
     if not PROJECT_CHAT_MAPPING:
@@ -368,7 +419,7 @@ async def github_webhook_receiver(request: Request):
             pusher_name = payload.get("pusher", {}).get("name", "未知推送者")
             
             commits = payload.get("commits", [])
-            if not commits: 
+            if not commits:
                 head_commit = payload.get("head_commit")
                 if head_commit:
                     commit_message = head_commit.get("message", "无提交信息 (可能为创建/删除分支)")
@@ -376,13 +427,40 @@ async def github_webhook_receiver(request: Request):
                     commit_author = head_commit.get("author", {}).get("name", pusher_name)
                 else:
                     commit_message = "无具体代码变更 (例如：分支创建/删除)"
-                    commit_url = payload.get("compare", "#") 
+                    commit_url = payload.get("compare", "#")
                     commit_author = pusher_name
-            else: 
-                latest_commit = commits[-1] 
-                commit_message = latest_commit.get("message", "无提交信息")
-                commit_url = latest_commit.get("url", "#")
-                commit_author = latest_commit.get("author", {}).get("name", "未知作者")
+            else:
+                # 处理多个提交的情况
+                if len(commits) == 1:
+                    # 单个提交时使用格式化函数
+                    single_commit = commits[0]
+                    formatted_message, author_display = format_commit_message(single_commit)
+                    commit_message = formatted_message
+                    commit_url = single_commit.get("url", "#")
+                    commit_author = author_display
+                else:
+                    # 多个提交时，展示所有提交信息
+                    commit_details = []
+                    # 收集所有不同的提交者
+                    unique_authors = set()
+                    for commit in commits:
+                        author = commit.get("author", {}).get("name", "未知作者")
+                        if author and author != "未知作者":
+                            unique_authors.add(author)
+
+                    for i, commit in enumerate(commits, 1):
+                        formatted_message, author_display = format_commit_message(commit)
+                        commit_details.append(f"{i}. {author_display}: {formatted_message}")
+
+                    commit_message = "\n".join(commit_details)
+                    commit_url = payload.get("compare", "#")  # 使用compare URL查看所有变更
+
+                    # 提交者显示为逗号分隔的名字列表
+                    if unique_authors:
+                        authors_list = [f"**@{author}**" for author in unique_authors]
+                        commit_author = ", ".join(authors_list)
+                    else:
+                        commit_author = "未知提交者"
 
             message_lines = [
                 f"📦 **仓库**: {repo_name}",
@@ -398,7 +476,7 @@ async def github_webhook_receiver(request: Request):
                 if compare_url:
                     message_lines.append(f"🔍 **查看所有变更**: {compare_url}")
 
-            # --- 构建消息卡片 --- 
+            # --- 构建消息卡片 ---
             card_elements = [
                 {
                     "tag": "div",
@@ -411,13 +489,18 @@ async def github_webhook_receiver(request: Request):
                 {
                     "tag": "div",
                     "text": {"tag": "lark_md", "content": f"👤 **提交者**: {commit_author}"}
-                },
-                {
+                }
+            ]
+
+            # 处理提交信息显示
+            if len(commits) <= 1:
+                # 单个提交的情况
+                card_elements.append({
                     "tag": "div",
                     "text": {"tag": "lark_md", "content": f"💬 **信息**: {commit_message}"}
-                },
-                {
-                    "tag": "action", # 使用 action 布局来放置链接按钮
+                })
+                card_elements.append({
+                    "tag": "action",
                     "actions": [
                         {
                             "tag": "button",
@@ -426,14 +509,39 @@ async def github_webhook_receiver(request: Request):
                             "url": commit_url
                         }
                     ]
-                }
-            ]
-
-            if len(commits) > 1:
-                card_elements.insert(4, { # 在提交信息和详情链接之间插入总提交数
+                })
+            else:
+                # 多个提交的情况
+                card_elements.append({
                     "tag": "div",
                     "text": {"tag": "lark_md", "content": f"✨ **总提交数**: {len(commits)}"}
                 })
+
+                # 限制显示的提交数量，避免卡片过长
+                max_display_commits = 10
+                displayed_commits = commits[:max_display_commits]
+
+                # 添加提交列表
+                for i, commit in enumerate(displayed_commits, 1):
+                    formatted_message, author_display = format_commit_message(commit)
+                    # 卡片中限制更短的长度
+                    if len(formatted_message) > 60:  # 卡片中允许稍长一些
+                        formatted_message = formatted_message[:57] + "..."
+
+                    card_elements.append({
+                        "tag": "div",
+                        "text": {"tag": "lark_md", "content": f"  {i}. {author_display}: {formatted_message}"}
+                    })
+
+                # 如果有更多提交，显示省略信息
+                if len(commits) > max_display_commits:
+                    remaining = len(commits) - max_display_commits
+                    card_elements.append({
+                        "tag": "div",
+                        "text": {"tag": "lark_md", "content": f"  ... 还有{remaining}个提交"}
+                    })
+
+                # 添加查看所有变更的按钮
                 compare_url_from_payload = payload.get("compare")
                 if compare_url_from_payload:
                     card_elements.append({
@@ -538,76 +646,8 @@ async def root():
         ]
     }
 
-def create_systemd_service():
-    """创建并安装 systemd 服务"""
-    import sys
-    import subprocess
-    
-    service_name = "github_webhook"
-    service_file_path = f"/etc/systemd/system/{service_name}.service"
-    
-    # 检查是否以 root 权限运行
-    if os.geteuid() != 0:
-        logger.error("此操作需要 root 权限，请使用 'sudo python main.py install-service' 运行")
-        sys.exit(1)
-
-    python_executable = "/opt/venvs/base/bin/python" # 明确使用指定的 python 环境
-    script_path = os.path.abspath(__file__)
-    working_directory = os.path.dirname(script_path)
-
-    logger.info(f"将使用 Python 解释器: {python_executable}")
-    logger.info(f"脚本路径: {script_path}")
-    logger.info(f"工作目录: {working_directory}")
-
-    service_content = f"""[Unit]
-Description=GitHub Webhook to Feishu Service
-After=network.target
-
-[Service]
-User=root
-WorkingDirectory={working_directory}
-ExecStart={python_executable} {script_path}
-Restart=always
-RestartSec=3
-
-[Install]
-WantedBy=multi-user.target
-"""
-    
-    try:
-        logger.info(f"正在创建 systemd 服务文件: {service_file_path}")
-        with open(service_file_path, "w") as f:
-            f.write(service_content)
-        
-        logger.info("刷新 systemd 配置...")
-        subprocess.run(["systemctl", "daemon-reload"], check=True)
-        
-        logger.info(f"启用服务 {service_name}...")
-        subprocess.run(["systemctl", "enable", service_name], check=True)
-        
-        logger.info(f"启动服务 {service_name}...")
-        subprocess.run(["systemctl", "restart", service_name], check=True)
-        
-        logger.info(f"服务 '{service_name}' 已成功安装并启动。")
-        logger.info("您可以使用 'systemctl status github_webhook' 来查看服务状态。")
-
-    except FileNotFoundError as e:
-        logger.error(f"命令执行失败: {e}. 请确保 systemctl 已安装并且在您的系统 PATH 中。")
-        sys.exit(1)
-    except subprocess.CalledProcessError as e:
-        logger.error(f"执行 systemd 命令时出错: {e}")
-        sys.exit(1)
-    except IOError as e:
-        logger.error(f"写入服务文件时出错: {e}")
-        sys.exit(1)
-
 if __name__ == "__main__":
-    import sys
-    # 命令行参数处理
-    if len(sys.argv) > 1 and sys.argv[1] == "install-service":
-        create_systemd_service()
+    if not CONFIG_SUCCESSFULLY_LOADED:
+        logger.error("Application configuration failed to load. Please check feishu_config.json. Service will not start.")
     else:
-        if not CONFIG_SUCCESSFULLY_LOADED:
-            logger.error("Application configuration failed to load. Please check feishu_config.json. Service will not start.")
-        else:
-            uvicorn.run(app, host="0.0.0.0", port=8002, log_level="info") 
+        uvicorn.run(app, host="0.0.0.0", port=8002, log_level="info") 
