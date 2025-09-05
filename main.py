@@ -158,46 +158,57 @@ CONFIG_SUCCESSFULLY_LOADED = load_app_config()
 
 def format_commit_message(commit):
     """格式化提交信息，添加图标和样式"""
+    import re
+
     message = commit.get("message", "无提交信息").split('\n')[0]
     author = commit.get("author", {}).get("name", "未知作者")
 
     # 为提交者添加@符号并加粗
     author_display = f"**@{author}**" if author != "未知作者" else author
 
-    # 根据提交类型添加图标
-    if message.lower().startswith('feat:'):
-        icon = "✨"
-        type_label = "特性"
-    elif message.lower().startswith('fix:'):
-        icon = "🐛"
-        type_label = "修复"
-    elif message.lower().startswith('docs:'):
-        icon = "📚"
-        type_label = "文档"
-    elif message.lower().startswith('style:'):
-        icon = "💅"
-        type_label = "样式"
-    elif message.lower().startswith('refactor:'):
-        icon = "♻️"
-        type_label = "重构"
-    elif message.lower().startswith('test:'):
-        icon = "🧪"
-        type_label = "测试"
-    elif message.lower().startswith('chore:'):
-        icon = "🔧"
-        type_label = "杂项"
-    elif message.lower().startswith('perf:'):
-        icon = "⚡"
-        type_label = "性能"
-    elif message.lower().startswith('ci:'):
-        icon = "🚀"
-        type_label = "CI"
-    elif message.lower().startswith('build:'):
-        icon = "📦"
-        type_label = "构建"
-    elif message.lower().startswith('revert:'):
-        icon = "⏪"
-        type_label = "回滚"
+    # 使用正则表达式匹配提交类型，包括带括号的格式
+    commit_type_match = re.match(r'^(\w+)(\([^)]*\))?:\s', message.lower())
+
+    if commit_type_match:
+        commit_type = commit_type_match.group(1)
+
+        # 根据提交类型添加图标
+        if commit_type == 'feat':
+            icon = "✨"
+            type_label = "特性"
+        elif commit_type == 'fix':
+            icon = "🐛"
+            type_label = "修复"
+        elif commit_type == 'docs':
+            icon = "📚"
+            type_label = "文档"
+        elif commit_type == 'style':
+            icon = "💅"
+            type_label = "样式"
+        elif commit_type == 'refactor':
+            icon = "♻️"
+            type_label = "重构"
+        elif commit_type == 'test':
+            icon = "🧪"
+            type_label = "测试"
+        elif commit_type == 'chore':
+            icon = "🔧"
+            type_label = "杂项"
+        elif commit_type == 'perf':
+            icon = "⚡"
+            type_label = "性能"
+        elif commit_type == 'ci':
+            icon = "🚀"
+            type_label = "CI"
+        elif commit_type == 'build':
+            icon = "📦"
+            type_label = "构建"
+        elif commit_type == 'revert':
+            icon = "⏪"
+            type_label = "回滚"
+        else:
+            icon = "📝"
+            type_label = "其他"
     elif message.lower().startswith('merge'):
         icon = "🔀"
         type_label = "合并"
@@ -524,10 +535,6 @@ async def github_webhook_receiver(request: Request):
                 # 添加提交列表
                 for i, commit in enumerate(displayed_commits, 1):
                     formatted_message, author_display = format_commit_message(commit)
-                    # 卡片中限制更短的长度
-                    if len(formatted_message) > 60:  # 卡片中允许稍长一些
-                        formatted_message = formatted_message[:57] + "..."
-
                     card_elements.append({
                         "tag": "div",
                         "text": {"tag": "lark_md", "content": f"  {i}. {author_display}: {formatted_message}"}
